@@ -1,5 +1,4 @@
 from flask import Flask, request, jsonify
-from pydantic import BaseModel
 import json
 from tensorflow import keras
 import numpy as np
