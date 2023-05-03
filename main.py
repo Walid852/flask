@@ -1,7 +1,11 @@
-from flask import Flask, request, jsonify
-import json
+import io
+
+from PyPDF2 import PdfReader
+from flask import Flask, request
 from tensorflow import keras
 import numpy as np
+import json
+import PyPDF2
 
 app = Flask(__name__)
 
@@ -38,7 +42,6 @@ maxRBC = 7.5
 minRDW = 9.72
 maxRDW = 39.4
 
-
 liver_model = keras.models.load_model('models/liver.h5')
 CBCA_model = keras.models.load_model('models/CBC_Advance.h5')
 CBC_model = keras.models.load_model('models/cbc.h5')
@@ -46,7 +49,6 @@ CBC_model = keras.models.load_model('models/cbc.h5')
 
 @app.route('/liver_pred', methods=['POST'])
 def liver_pred():
-
     input_data = request.get_json()
 
     TB = (input_data['TotalBilirubin'] - minTB) / (maxTB - minTB)
@@ -61,23 +63,35 @@ def liver_pred():
 
     class_labels = np.argmax(prediction, axis=1)
 
+    predicted = None
     if class_labels[0] == 0:
-        return "Nothing"
+        predicted = "Nothing"
     elif class_labels[0] == 1:
-        return "Virus C"
+        predicted = "Virus C"
     elif class_labels[0] == 2:
-        return "Gallbladder"
+        predicted = "Gallbladder"
     elif class_labels[0] == 3:
-        return "Virus A"
+        predicted = "Virus A"
     elif class_labels[0] == 4:
-        return "Fatty Liver"
+        predicted = "Fatty Liver"
+
+    data = {
+        "status": True,
+        "message": "Disease is predicted",
+        "data": {
+            "disease": predicted
+        }
+    }
+
+    # Convert to JSON string
+    json_data = json.dumps(data)
+    return json_data
 
 
 @app.route('/CBCA_pred', methods=['POST'])
 def CBCA_pred():
-
     input_data = request.get_json()
-    
+
     MCHC = (input_data['MCHC'] - minMCHC) / (maxMCHC - minMCHC)
     HCT = (input_data['HCT'] - minHCT) / (maxHCT - minHCT)
     HGB = (input_data['HGB'] - minHGB) / (maxHGB - minHGB)
@@ -96,16 +110,29 @@ def CBCA_pred():
 
     class_labels = np.argmax(prediction, axis=1)
 
+    predicted = None
     if class_labels[0] == 0:
-        return "Nothing"
+        predicted = "Nothing"
     elif class_labels[0] == 1:
-        return "HGB anemia"
+        predicted = "HGB anemia"
     elif class_labels[0] == 2:
-        return "iron anemia"
+        predicted = "iron anemia"
     elif class_labels[0] == 3:
-        return "Folate anemia"
+        predicted = "Folate anemia"
     elif class_labels[0] == 4:
-        return "B12 anemia"
+        predicted = "B12 anemia"
+
+    data = {
+        "status": True,
+        "message": "Disease is predicted",
+        "data": {
+            "disease": predicted
+        }
+    }
+
+    # Convert to JSON string
+    json_data = json.dumps(data)
+    return json_data
 
 
 @app.route('/CBC_pred', methods=['POST'])
@@ -126,19 +153,281 @@ def CBC_pred():
     prediction = CBC_model.predict([input_list])
 
     class_labels = np.argmax(prediction, axis=1)
-
+    predicted = None
     if class_labels[0] == 0:
-        return "Nothing"
+        predicted = "Nothing"
     elif class_labels[0] == 1:
-        return "hemolytic"
+        predicted = "hemolytic"
     elif class_labels[0] == 2:
-        return "macrocytic"
+        predicted = "macrocytic"
     elif class_labels[0] == 3:
-        return "penectopenia"
+        predicted = "penectopenia"
     elif class_labels[0] == 4:
-        return "microcytic hypochromic"
+        predicted = "microcytic hypochromic"
+
+    data = {
+        "status": True,
+        "message": "Disease is predicted",
+        "data": {
+            "disease": predicted
+        }
+    }
+
+    # Convert to JSON string
+    json_data = json.dumps(data)
+    return json_data
+
+
+@app.route('/CBC_read', methods=['POST'])
+def CBC_read():
+    file = request.files['file']
+    pdf_reader = PdfReader(io.BytesIO(file.read()))
+    to_be_find = ['Haemoglobin', 'Red Cells Count', 'Haematocrit', 'MCV', 'MCH', 'MCHC', 'RDW', 'Platelets Count',
+                  'Total Leucocytic Count'
+        , 'Basophils %', 'Eosinophils %', 'Neutrophils %', 'Lymphocytes %', 'Monocytes %', 'Neutrophils absolute count',
+                  'Lymphocytes absolute count', 'Monocytes absolute count', 'Eosinophils absolute count',
+                  'Basophils absolute count']
+    parameters = []
+    for parameter in to_be_find:
+        parameter_value = None
+        for page_num in range(len(pdf_reader.pages)):
+            page = pdf_reader.pages[page_num]
+
+            # Extract the text from the page
+            text = page.extract_text()
+
+            # Find the index of the parameter in the text
+            index = text.find(parameter)
+            if index != -1:
+                line = text[index:text.find('\n', index)]
+                words = line.split()
+                # Find the index of the parameter value in the line
+                value_index = words.index(parameter.split()[-1]) + 1
+                parameter_value = text[index:].split()[value_index]
+                parameters.append(parameter_value)
+                break  # Exit the page loop if the parameter is found
+            else:
+                parameters.append(-1)
+
+    param_dict = {}
+    for name, value in zip(to_be_find, parameters):
+        param_dict[name] = value
+
+    if all(value == -1 for value in param_dict.values()):
+        data = {
+            "status": False,
+            "message": "The file content is not proper, try to fill manually",
+            "data": param_dict
+        }
+    else:
+        data = {
+            "status": True,
+            "message": "CBC is added",
+            "data": param_dict
+        }
+
+    # Convert to JSON string
+    json_data = json.dumps(data)
+    return json_data
+
+
+@app.route('/liver_read', methods=['POST'])
+def liver_read():
+    file = request.files['file']
+    pdf_reader = PdfReader(io.BytesIO(file.read()))
+    to_be_find = ['GammaGT', 'Bilirubin_Total', 'Bilirubin_Direct', 'AST', 'ALT', 'Alk', 'TotalProtein', 'Albumin']
+
+    parameters = []
+    for parameter in to_be_find:
+        parameter_value = None
+        for page_num in range(len(pdf_reader.pages)):
+            page = pdf_reader.pages[page_num]
+
+            # Extract the text from the page
+            text = page.extract_text()
+
+            # Find the index of the parameter in the text
+            index = text.find(parameter)
+            if index != -1:
+                line = text[index:text.find('\n', index)]
+                words = line.split()
+                # Find the index of the parameter value in the line
+                value_index = words.index(parameter.split()[-1]) + 1
+                parameter_value = text[index:].split()[value_index]
+                parameters.append(parameter_value)
+                break  # Exit the page loop if the parameter is found
+            else:
+                parameters.append(-1)
+
+    param_dict = {}
+    for name, value in zip(to_be_find, parameters):
+        param_dict[name] = value
+    if all(value == -1 for value in param_dict.values()):
+        data = {
+            "status": False,
+            "message": "The file content is not proper, try to fill manually",
+            "data": param_dict
+        }
+    else:
+        data = {
+            "status": True,
+            "message": "Liver is added",
+            "data": param_dict
+        }
+
+    # Convert to JSON string
+    json_data = json.dumps(data)
+    return json_data
+
+
+@app.route('/Renal_read', methods=['POST'])
+def Renal_read():
+    file = request.files['file']
+    pdf_reader = PdfReader(io.BytesIO(file.read()))
+    to_be_find = ['Urea', 'CreatinineInSerum', 'UricAcid']
+    parameters = []
+    for parameter in to_be_find:
+        parameter_value = None
+        for page_num in range(len(pdf_reader.pages)):
+            page = pdf_reader.pages[page_num]
+
+            # Extract the text from the page
+            text = page.extract_text()
+
+            # Find the index of the parameter in the text
+            index = text.find(parameter)
+            if index != -1:
+                line = text[index:text.find('\n', index)]
+                words = line.split()
+                # Find the index of the parameter value in the line
+                value_index = words.index(parameter.split()[-1]) + 1
+                parameter_value = text[index:].split()[value_index]
+                parameters.append(parameter_value)
+                break  # Exit the page loop if the parameter is found
+            else:
+                parameters.append(-1)
+
+    param_dict = {}
+    for name, value in zip(to_be_find, parameters):
+        param_dict[name] = value
+    if all(value == -1 for value in param_dict.values()):
+        data = {
+            "status": False,
+            "message": "The file content is not proper, try to fill manually",
+            "data": param_dict
+        }
+    else:
+        data = {
+            "status": True,
+            "message": "Renal is added",
+            "data": param_dict
+
+        }
+
+    # Convert to JSON string
+    json_data = json.dumps(data)
+    return json_data
+
+
+@app.route('/stool_read', methods=['POST'])
+def Stool_read():
+    file = request.files['file']
+    pdf_reader = PdfReader(io.BytesIO(file.read()))
+    to_be_find = ['Color', 'Consistency', 'FoodParticles', 'Mucus', 'Blood', 'Starch', 'Muscle fibers', 'Vegetables',
+                  'Protozoa', 'Ciliates']
+    parameters = []
+    for parameter in to_be_find:
+        parameter_value = None
+        for page_num in range(len(pdf_reader.pages)):
+            page = pdf_reader.pages[page_num]
+
+            # Extract the text from the page
+            text = page.extract_text()
+
+            # Find the index of the parameter in the text
+            index = text.find(parameter)
+            if index != -1:
+                line = text[index:text.find('\n', index)]
+                words = line.split()
+                # Find the index of the parameter value in the line
+                value_index = words.index(parameter.split()[-1]) + 1
+                parameter_value = text[index:].split()[value_index]
+                parameters.append(parameter_value)
+                break  # Exit the page loop if the parameter is found
+            else:
+                parameters.append(-1)
+
+    param_dict = {}
+    for name, value in zip(to_be_find, parameters):
+        param_dict[name] = value
+    if all(value == -1 for value in param_dict.values()):
+        data = {
+            "status": False,
+            "message": "The file content is not proper, try to fill manually",
+            "data": param_dict
+        }
+    else:
+        data = {
+            "status": True,
+            "message": "Stool is added",
+            "data": param_dict
+
+        }
+
+    # Convert to JSON string
+    json_data = json.dumps(data)
+    return json_data
+
+
+@app.route('/urine_read', methods=['POST'])
+def Urine_read():
+    file = request.files['file']
+    pdf_reader = PdfReader(io.BytesIO(file.read()))
+    to_be_find = ['Color', 'Clarity', 'Specific Gravity', 'UrinePH', 'Protein', 'Glucose', 'Ketone', 'Urine bilirubin',
+                  'Nitrite', 'Crystals', 'Casts']
+    parameters = []
+    for parameter in to_be_find:
+        parameter_value = None
+        for page_num in range(len(pdf_reader.pages)):
+            page = pdf_reader.pages[page_num]
+
+            # Extract the text from the page
+            text = page.extract_text()
+
+            # Find the index of the parameter in the text
+            index = text.find(parameter)
+            if index != -1:
+                line = text[index:text.find('\n', index)]
+                words = line.split()
+                # Find the index of the parameter value in the line
+                value_index = words.index(parameter.split()[-1]) + 1
+                parameter_value = text[index:].split()[value_index]
+                parameters.append(parameter_value)
+                break  # Exit the page loop if the parameter is found
+            else:
+                parameters.append(-1)
+
+    param_dict = {}
+    for name, value in zip(to_be_find, parameters):
+        param_dict[name] = value
+    if all(value == -1 for value in param_dict.values()):
+        data = {
+            "status": False,
+            "message": "The file content is not proper, try to fill manually",
+            "data": param_dict
+        }
+    else:
+        data = {
+            "status": True,
+            "message": "Urine is added",
+            "data": param_dict
+
+        }
+
+    # Convert to JSON string
+    json_data = json.dumps(data)
+    return json_data
 
 
 if __name__ == '__main__':
     app.run()
-
